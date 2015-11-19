@@ -2427,7 +2427,6 @@ wait_for_bridge(Timeout, Fun, Call, Start, {'ok', JObj}) ->
             lager:info("bridge completed with result ~s(~s)", [Disposition, Result]),
             {Result, JObj};
         _E ->
-            lager:debug("unhandled event type: ~p", [_E]),
             wait_for_bridge(wh_util:decr_timeout(Timeout, Start), Fun, Call)
     end.
 

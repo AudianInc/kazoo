@@ -71,7 +71,7 @@
                                                        ,'CHANNEL_BRIDGE'
                                                        ,'CHANNEL_DESTROY'
                                                        ,'CHANNEL_EXECUTE_COMPLETE'
-                                                       ,'CHANNEL_REPLACED'
+%                                                       ,'CHANNEL_REPLACED'
                                                        ,'RECORD_START'
                                                        ,'RECORD_STOP'
                                                       ]}
@@ -118,6 +118,7 @@ strip_tmp(File) -> File.
 handle_call_event(JObj, Props) ->
     wh_util:put_callid(JObj),
     Pid = props:get_value('server', Props),
+    lager:debug("WH_MEDIA EVENT ~p", [JObj]),
 
     case wh_util:get_event_type(JObj) of
         {<<"call_event">>, <<"CHANNEL_BRIDGE">>} ->
@@ -126,8 +127,8 @@ handle_call_event(JObj, Props) ->
         {<<"call_event">>, <<"CHANNEL_ANSWER">>} ->
             lager:debug("channel bridge maybe start recording on answer"),
             gen_listener:cast(Pid, 'maybe_start_recording_on_answer');
-        {<<"call_event">>, <<"CHANNEL_REPLACED">>} ->
-            gen_listener:cast(Pid, {'channel_replaced', kz_call_event:replaced_by(JObj)});
+%%         {<<"call_event">>, <<"CHANNEL_REPLACED">>} ->
+%%             gen_listener:cast(Pid, {'channel_replaced', kz_call_event:replaced_by(JObj), JObj});
         {<<"call_event">>, <<"RECORD_START">>} ->
             lager:debug("record_start event received"),
             gen_listener:cast(Pid, {'record_start', get_response_media(JObj)});
@@ -286,14 +287,15 @@ handle_cast('maybe_start_recording_on_answer', #state{is_recording='false'
                   ,time_limit_ref=start_time_limit_timer(TimeLimit)
                  }
     };
-handle_cast({'channel_replaced', ReplacedId}, #state{call=Call
-                                                     ,format=Format
-                                                    }=State) ->
-    lager:debug("recv channel_replaced event"),
-    {'noreply', State#state{call=whapps_call:set_call_id(ReplacedId, Call)
-                            ,media_name=get_media_name(ReplacedId, Format)
-                           }
-    };
+%% handle_cast({'channel_replaced', ReplacedId, JObj}, #state{call=Call
+%%                                                      ,format=Format
+%%                                                     }=State) ->
+%%     lager:debug("recv channel_replaced event ~p", [JObj]),
+%%     
+%%     {'noreply', State#state{call=whapps_call:set_call_id(ReplacedId, Call)
+%%                             ,media_name=get_media_name(ReplacedId, Format)
+%%                            }
+%%     };
 handle_cast('stop_call', #state{store_attempted='true'}=State) ->
     lager:debug("we've already sent a store attempt, waiting to hear back"),
     {'noreply', State};
@@ -360,8 +362,11 @@ handle_cast('store_failed', #state{retries=Retries
     {'noreply', State#state{retries=Retries - 1}};
 
 handle_cast({'gen_listener',{'created_queue',Queue}}, #state{call=Call}=State) ->
-    Call1 = whapps_call:kvs_store('consumer_pid', wh_amqp_channel:consumer_pid(), Call),
-    {'noreply', State#state{call=whapps_call:set_controller_queue(Queue, Call1)}};
+    Funs = [{fun whapps_call:kvs_store/3, 'consumer_pid', self()}
+            ,fun whapps_call:clear_helpers/1
+            ,{fun whapps_call:set_controller_queue/2, Queue}
+           ],
+    {'noreply', State#state{call=whapps_call:exec(Funs, Call)}};
 
 handle_cast({'gen_listener',{'is_consuming', 'true'}}, #state{record_on_answer='true'}=State) ->
     lager:debug("waiting for answer to start recording"),
@@ -376,7 +381,7 @@ handle_cast({'gen_listener',{'is_consuming', 'true'}}, #state{record_on_answer='
                                                              }=State) ->
     start_recording(Call, MediaName, TimeLimit, <<"wh_media_recording">>, SampleRate, RecordMinSec),
     lager:debug("started the recording"),
-    {'noreply', State#state{is_recording='true'}};
+    {'noreply', State};
 
 handle_cast(_Msg, State) ->
     lager:debug("unhandled cast: ~p", [_Msg]),
@@ -411,6 +416,7 @@ handle_info({'check_call', Ref}, #state{call=Call
                                         ,channel_status_ref=Ref
                                        }=State) ->
     lager:debug("querying for channel status from ~p", [Ref]),
+    
     StatusAPI = whapps_call_command:channel_status_command(Call, 'true')
         ++ wh_api:default_headers(whapps_call:controller_queue(Call), ?APP_NAME, ?APP_VERSION),
 
