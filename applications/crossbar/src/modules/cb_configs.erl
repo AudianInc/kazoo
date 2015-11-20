@@ -15,9 +15,11 @@
          ,allowed_methods/1
          ,resource_exists/0, resource_exists/1
          ,validate/2
+         ,get/2
          ,put/2
          ,post/2
          ,patch/2
+         ,delete/2
         ]).
 
 -include("../crossbar.hrl").
@@ -37,8 +39,11 @@ init() ->
     _ = crossbar_bindings:bind(<<"*.allowed_methods.configs">>, ?MODULE, 'allowed_methods'),
     _ = crossbar_bindings:bind(<<"*.resource_exists.configs">>, ?MODULE, 'resource_exists'),
     _ = crossbar_bindings:bind(<<"*.validate.configs">>, ?MODULE, 'validate'),
+    _ = crossbar_bindings:bind(<<"*.execute.get.configs">>, ?MODULE, 'get'),
+    _ = crossbar_bindings:bind(<<"*.execute.put.configs">>, ?MODULE, 'put'),
     _ = crossbar_bindings:bind(<<"*.execute.post.configs">>, ?MODULE, 'post'),
-    _ = crossbar_bindings:bind(<<"*.execute.patch.configs">>, ?MODULE, 'patch').
+    _ = crossbar_bindings:bind(<<"*.execute.patch.configs">>, ?MODULE, 'patch'),
+    _ = crossbar_bindings:bind(<<"*.execute.delete.configs">>, ?MODULE, 'delete').
 
 %%--------------------------------------------------------------------
 %% @public
@@ -49,7 +54,7 @@ init() ->
 %%--------------------------------------------------------------------
 -spec allowed_methods(path_token()) -> http_methods().
 allowed_methods(_) ->
-    [?HTTP_GET, ?HTTP_POST, ?HTTP_PATCH].
+    [?HTTP_GET, ?HTTP_PUT, ?HTTP_POST, ?HTTP_PATCH, ?HTTP_DELETE].
 
 %%--------------------------------------------------------------------
 %% @public
@@ -81,8 +86,22 @@ validate(Context, Config) ->
 
 -spec validate(cb_context:context(), http_method(), path_token()) -> cb_context:context().
 validate(Context, ?HTTP_GET, Config) -> read(Config, Context);
+validate(Context, ?HTTP_PUT, Config) -> create(Config, Context);
 validate(Context, ?HTTP_POST, Config) -> update(Config, Context);
-validate(Context, ?HTTP_PATCH, Config) -> validate_patch(Config, Context).
+validate(Context, ?HTTP_PATCH, Config) -> validate_patch(Config, Context);
+validate(Context, ?HTTP_DELETE, Config) -> read(Config, Context).
+
+%%--------------------------------------------------------------------
+%% @public
+%% @doc
+%% If the HTTP verb is a GET, execute necessary code to fulfill the GET
+%% request. Generally, this will involve stripping pvt fields and loading
+%% the resource into the resp_data, resp_headers, etc...
+%% @end
+%%--------------------------------------------------------------------
+-spec get(cb_context:context(), path_token()) -> cb_context:context().
+get(Context, _) ->
+    Context.
 
 %%--------------------------------------------------------------------
 %% @public
@@ -115,6 +134,33 @@ post(Context, _) ->
 -spec patch(cb_context:context(), path_token()) -> cb_context:context().
 patch(Context, _) ->
     crossbar_doc:save(Context).
+
+%%--------------------------------------------------------------------
+%% @public
+%% @doc
+%% If the HTTP verib is DELETE, execute the actual action, usually a db delete
+%% @end
+%%--------------------------------------------------------------------
+-spec delete(cb_context:context(), path_token()) -> cb_context:context().
+delete(Context, _) ->
+    crossbar_doc:delete(Context).
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Create a new instance with the data provided, if it is valid
+%% @end
+%%--------------------------------------------------------------------
+-spec create(ne_binary(), cb_context:context()) -> cb_context:context().
+create(Config, Context) ->
+    Id = <<(?WH_ACCOUNT_CONFIGS)/binary, Config/binary>>,
+    case couch_mgr:lookup_doc_rev(cb_context:account_db(Context), Id) of
+        {'ok', _} -> cb_context:add_system_error('datastore_conflict', Context);
+        {'error', _} ->
+            JObj = wh_doc:set_id(cb_context:req_data(Context), Id),
+            Context1 = cb_context:set_req_data(Context, JObj),
+            cb_context:validate_request_data(<<"configs">>, Context1)
+    end.
 
 %%--------------------------------------------------------------------
 %% @private
