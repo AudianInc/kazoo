@@ -28,12 +28,25 @@
                            ,{'xmlns', "http://www.bandwidth.com/api/"}
                           ]).
 -define(BW_NUMBER_URL, whapps_config:get_string(?WNM_BW_CONFIG_CAT
-                                                   ,<<"numbers_api_url">>
-                                                   ,<<"https://api.bandwidth.com/public/v2/numbers.api">>)).
+                                                ,<<"numbers_api_url">>
+                                                ,<<"https://api.bandwidth.com/public/v2/numbers.api">>)).
 -define(BW_CDR_URL, whapps_config:get_string(?WNM_BW_CONFIG_CAT
-                                                ,<<"cdrs_api_url">>
-                                                ,<<"https://api.bandwidth.com/api/public/v2/cdrs.api">>)).
+                                             ,<<"cdrs_api_url">>
+                                             ,<<"https://api.bandwidth.com/api/public/v2/cdrs.api">>)).
 -define(BW_DEBUG, whapps_config:get_is_true(?WNM_BW_CONFIG_CAT, <<"debug">>, 'false')).
+
+-define(IS_TOLLFREE(Prefix),
+        Prefix == <<"800">> orelse
+        Prefix == <<"888">> orelse
+        Prefix == <<"877">> orelse
+        Prefix == <<"866">> orelse
+        Prefix == <<"855">> orelse
+        Prefix == <<"844">>
+       ).
+-define(TOLLFREE_LOGIN,
+        whapps_config:get_string(?WNM_BW_CONFIG_CAT, <<"tollfree_login">>, <<"darren@2600hz.com">>).
+-define(TOLLFREE_PASSWORD,
+        whapps_config:get_string(?WNM_BW_CONFIG_CAT, <<"tollfree_password">>, <<"THE-PASSWORD">>).
 
 %%--------------------------------------------------------------------
 %% @public
@@ -58,6 +71,12 @@ get_number_data(Number) ->
             number_search_response_to_json(Response)
     end.
 
+
+%% @public
+-spec is_number_billable(wnm_number()) -> 'true'.
+is_number_billable(_Number) -> 'true'.
+
+
 %%--------------------------------------------------------------------
 %% @public
 %% @doc
@@ -72,18 +91,9 @@ find_numbers(<<"+", Rest/binary>>, Quantity, Opts) ->
     find_numbers(Rest, Quantity, Opts);
 find_numbers(<<"1", Rest/binary>>, Quantity, Opts) ->
     find_numbers(Rest, Quantity, Opts);
-find_numbers(<<Prefix:3/binary, _/binary>>, Quantity, _)
-  when Prefix == <<"800">>;
-       Prefix == <<"888">>;
-       Prefix == <<"877">>;
-       Prefix == <<"866">>;
-       Prefix == <<"855">>;
-       Prefix == <<"844">>
-       ->
-    Props = [{areaCode, [wh_util:to_list(Prefix)]}
-             ,{'maxQuantity', [wh_util:to_list(erlang:max(300, Quantity))]}
-            ],
-    do_search_by('tollfreeNumberSearch', Props);
+find_numbers(<<Prefix:3/binary,_/binary>>, _, _)
+  when ?IS_TOLLFREE(Prefix) ->
+    do_tollfree_search(wh_util:to_list(Prefix));
 find_numbers(<<NPA:3/binary>>, Quantity, _) ->
     Props = [{'areaCode', [wh_util:to_list(NPA)]}
              ,{'maxQuantity', [wh_util:to_list(Quantity)]}
@@ -112,9 +122,28 @@ do_search_by(ByType, Props) ->
             {'ok', wh_json:from_list(Resp)}
     end.
 
+do_tollfree_search(TollFreePrefix) ->
+    case maybe_tollfree_login() of
+        {'error', _}=E -> E;
+        {'ok', SessionID} ->
+            case maybe_tollfree_search(SessionID, TollFreePrefix) of
+                {'error', _}=E -> E;
+                {'ok', Numbers} -> {'ok', Numbers}
+            end
+    end.
 
--spec is_number_billable(wnm_number()) -> 'true'.
-is_number_billable(_Number) -> 'true'.
+maybe_tollfree_login() ->
+    Body =
+        "<?xml version='1.0' encoding='utf-8'?>"
+        "<soap:Envelope xmlns:xsl='http://www.w3.org/2001/XMLSchema-instance' xmlns:xsd='http://www.w3.org/2001/XMLSchema' xmlns:soap='http://schemas.xmlsoap.org/soap/envelope'>"
+        "<soap:Body>"
+        "<Login xmlns='http://www.bandwidth.com'>"
+        "<UserName>" ++ ?TOLLFREE_LOGIN ++ "</UserName>"
+        "<Password>" ++ ?TOLLFREE_PASSWORD ++ "</Password>"
+        "</Login>"
+        "</soap:Body>"
+        "</soap:Envelope>",
+    
 
 %%--------------------------------------------------------------------
 %% @public
@@ -283,7 +312,7 @@ make_numbers_request(Verb, Props) ->
 %% Convert a number order response to json
 %% @end
 %%--------------------------------------------------------------------
--spec number_order_response_to_json(any()) -> wh_json:object().
+-spec number_order_response_to_json(iolist()) -> wh_json:object().
 number_order_response_to_json([]) ->
     wh_json:new();
 number_order_response_to_json([Xml]) ->
@@ -307,7 +336,7 @@ number_order_response_to_json(Xml) ->
 %% Convert a number search response XML entity to json
 %% @end
 %%--------------------------------------------------------------------
--spec number_search_response_to_json(any()) -> wh_json:object().
+-spec number_search_response_to_json(iolist()) -> wh_json:object().
 number_search_response_to_json([]) ->
     wh_json:new();
 number_search_response_to_json([Xml]) ->
